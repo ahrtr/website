@@ -10,15 +10,18 @@ Discovery service protocol is _only_ used in cluster bootstrap phase, and cannot
 
 The protocol uses a new discovery token to bootstrap one _unique_ etcd cluster. Remember that one discovery token can represent only one etcd cluster. As long as discovery protocol on this token starts, even if it fails halfway, it must not be used to bootstrap another etcd cluster.
 
-The rest of this article will walk through the discovery process with examples that correspond to a self-hosted discovery cluster. The public discovery service, discovery.etcd.io, functions the same way, but with a layer of polish to abstract away ugly URLs, generate UUIDs automatically, and provide some protections against excessive requests. At its core, the public discovery service still uses an etcd cluster as the data store as described in this document.
+The rest of this article will walk through the discovery process with examples that correspond to a self-hosted discovery cluster.
+
+Note that this document is only for v3 discovery. Check previous document for more details on [v2 discovery](v2-discovery).
 
 ## Protocol workflow
 
 The idea of discovery protocol is to use an internal etcd cluster to coordinate bootstrap of a new cluster. First, all new members interact with discovery service and help to generate the expected member list. Then each new member bootstraps its server using this list, which performs the same functionality as -initial-cluster flag.
 
-In the following example workflow, we will list each step of protocol in curl format for ease of understanding.
+In the following example workflow, we will list each step of protocol using `etcdctl` command for ease of understanding, and we assume that `http://example.com:2379` hosts an etcd cluster for discovery service.
 
-By convention the etcd discovery protocol uses the key prefix `_etcd/registry`. If `http://example.com` hosts an etcd cluster for discovery service, a full URL to discovery keyspace will be `http://example.com/v2/keys/_etcd/registry`. We will use this as the URL prefix in the example.
+By convention the etcd discovery protocol uses the key prefix `/_etcd/registry`.
+
 
 ### Creating a new discovery token
 
@@ -33,30 +36,41 @@ UUID=$(uuidgen)
 The discovery token expects a cluster size that must be specified. The size is used by the discovery service to know when it has found all members that will initially form the cluster.
 
 ```
-curl -X PUT http://example.com/v2/keys/_etcd/registry/${UUID}/_config/size -d value=${cluster_size}
+etcdctl --endpoints=http://example.com:2379 put /_etcd/registry/${UUID}/_config/size ${cluster_size}
 ```
 
 Usually the cluster size is 3, 5 or 7. Check [optimal cluster size][cluster-size] for more details.
 
 ### Bringing up etcd processes
 
-Given the discovery URL, use it as `-discovery` flag and bring up etcd processes. Every etcd process will follow this next few steps internally if given a `-discovery` flag.
+Given the discovery URL `http://example.com:2379/${UUID}`, use it as `--discovery` flag and set `--enable-v2-discovery` flag as `false` to enable v3 discovery. Note that `--enable-v2-discovery` is `true` by default for now, so as not to break any existing v2 discovery functionality.
+
+Every etcd process will follow this next few steps internally if given `--discovery` and `--enable-v2-discovery false` flags.
+
+If the discovery service enables client cert authentication, configure the following flags appropriately as well. It follows exactly the same usage as etcdctl communicating with an etcd cluster.
+```
+--discovery-insecure-transport
+--discovery-insecure-skip-tls-verify
+--discovery-cert
+--discovery-key
+--discovery-cacert
+```
 
 ### Registering itself
 
-The first thing for etcd process is to register itself into the discovery URL as a member. This is done by creating member ID as a key in the discovery URL.
+The first thing for etcd process is to register itself into the given new cluster as a member. This is done by creating member ID as a key in the full registry key.
 
 ```
-curl -X PUT http://example.com/v2/keys/_etcd/registry/${UUID}/${member_id}?prevExist=false -d value="${member_name}=${member_peer_url_1}&${member_name}=${member_peer_url_2}"
+etcdctl --endpoints=http://example.com:2379 put /_etcd/registry/${UUID}/members/${member_id} ${member_name}=${member_peer_url_1}&${member_name}=${member_peer_url_2}
 ```
 
 ### Checking the status
 
-It checks the expected cluster size and registration status in discovery URL, and decides what the next action is.
+It checks the expected cluster size and registration status, and decides what the next action is.
 
 ```
-curl -X GET http://example.com/v2/keys/_etcd/registry/${UUID}/_config/size
-curl -X GET http://example.com/v2/keys/_etcd/registry/${UUID}
+etcdctl --endpoints=http://example.com:2379 get /_etcd/registry/${UUID}/_config/size
+etcdctl --endpoints=http://example.com:2379 get /_etcd/registry/${UUID}/members
 ```
 
 If registered members are still not enough, it will wait for left members to appear.
@@ -67,51 +81,13 @@ In etcd implementation, the member may check the cluster status even before regi
 
 ### Waiting for all members
 
-The wait process is described in detail in the [etcd API documentation][api].
+The wait process keeps watching the key prefix `/_etcd/registry/${UUID}/members` until finding all members.
 
 ```
-curl -X GET http://example.com/v2/keys/_etcd/registry/${UUID}?wait=true&waitIndex=${current_etcd_index}
+etcdctl --endpoints=http://example.com:2379 watch /_etcd/registry/${UUID}/members --prefix
 ```
 
-It keeps waiting until finding all members.
-
-## Public discovery service
-
-CoreOS Inc. hosts a public discovery service at https://discovery.etcd.io/ , which provides some nice features for ease of use.
-
-### Mask key prefix
-
-Public discovery service will redirect `https://discovery.etcd.io/${UUID}` to etcd cluster behind for the key at `/v2/keys/_etcd/registry`. It masks register key prefix for short and readable discovery url.
-
-### Get new token
-
-```
-GET /new
-
-Sent query:
-	size=${cluster_size}
-Possible status codes:
-	200 OK
-	400 Bad Request
-200 Body:
-	generated discovery url
-```
-
-The generation process in the service follows the steps from [Creating a New Discovery Token][new-discovery-token] to [Specifying the Expected Cluster Size][expected-cluster-size].
-
-### Check discovery status
-
-```
-GET /${UUID}
-```
-
-The status for this discovery token, including the machines that have been registered, can be checked by requesting the value of the UUID.
-
-### Open-source repository
-
-The repository is located at https://github.com/coreos/discovery.etcd.io. It could be used to build a custom discovery service.
-
-[api]: /docs/v2.3/api#waiting-for-a-change
+[v2-discovery]: /docs/v3.5/dev-internal/v2_discovery_protocol
 [cluster-size]: /docs/v2.3/admin_guide#optimal-cluster-size
 [expected-cluster-size]: #specifying-the-expected-cluster-size
 [new-discovery-token]: #creating-a-new-discovery-token
