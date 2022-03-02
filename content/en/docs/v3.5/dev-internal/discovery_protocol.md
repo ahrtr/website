@@ -4,7 +4,7 @@ weight: 1500
 description: Discover other etcd members in a cluster bootstrap phase
 ---
 
-Discovery service protocol helps new etcd member to discover all other members in cluster bootstrap phase using a shared discovery URL.
+Discovery service protocol helps new etcd member to discover all other members in cluster bootstrap phase using a shared discovery token and endpoint list.
 
 Discovery service protocol is _only_ used in cluster bootstrap phase, and cannot be used for runtime reconfiguration or cluster monitoring.
 
@@ -43,17 +43,31 @@ Usually the cluster size is 3, 5 or 7. Check [optimal cluster size][cluster-size
 
 ### Bringing up etcd processes
 
-Given the discovery URL `http://example.com:2379/${UUID}`, use it as `--discovery` flag and set `--enable-v2-discovery` flag as `false` to enable v3 discovery. Note that `--enable-v2-discovery` is `true` by default for now, so as not to break any existing v2 discovery functionality.
+Set the discovery token `${UUID}` to `--discovery-token` flag, and set the endpoints of the etcd cluster backing the discovery service to `--discovery-endpoints` flag,  then v3 discovery is enabled to bootstrap the etcd cluster.
 
-Every etcd process will follow this next few steps internally if given `--discovery` and `--enable-v2-discovery false` flags.
+Every etcd process will follow this next few steps internally if given `--discovery-token` and `--discovery-endpoints` flags.
 
-If the discovery service enables client cert authentication, configure the following flags appropriately as well. It follows exactly the same usage as etcdctl communicating with an etcd cluster.
+If the discovery service enables client cert authentication, configure the following flags appropriately as well. They follow exactly the same usage as `etcdctl` communicating with an etcd cluster.
 ```
 --discovery-insecure-transport
 --discovery-insecure-skip-tls-verify
 --discovery-cert
 --discovery-key
 --discovery-cacert
+```
+
+If the discovery service enables role based authentication, configure the following flags appropriately as well. They follow exactly the same usage as `etcdctl` communicating with an etcd cluster.
+```
+--discovery-user
+--discovery-password
+```
+
+The default time or timeout values can also be changed using the following flags, which also follow exactly the same usage as `etcdctl` communicating with an etcd cluster.
+```
+--discovery-dial-timeout
+--discovery-request-timeout
+--discovery-keepalive-time
+--discovery-keepalive-timeout
 ```
 
 ### Registering itself
@@ -75,7 +89,7 @@ etcdctl --endpoints=http://example.com:2379 get /_etcd/registry/${UUID}/members
 
 If registered members are still not enough, it will wait for left members to appear.
 
-If the number of registered members is bigger than the expected size N, it treats the first N registered members as the member list for the cluster. If the member itself is in the member list, the discovery procedure succeeds and it fetches all peers through the member list. If it is not in the member list, the discovery procedure finishes with the failure that the cluster has been full.
+If the number of registered members is bigger than the expected size N, it treats the first N registered members as the member list for the cluster. If the member itself is in the member list, the discovery procedure succeeds, and it fetches all peers through the member list. If it is not in the member list, the discovery procedure finishes with the failure that the cluster has been full.
 
 In etcd implementation, the member may check the cluster status even before registering itself. So it could fail quickly if the cluster has been full.
 
